@@ -104,6 +104,14 @@ export default function App() {
   // ─── Auto-scroll ───────────────────────────────────────────────────────
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
+  // ─── Textarea auto-resize ─────────────────────────────────────────────
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
+
   // ─── File toggle ───────────────────────────────────────────────────────
   const toggleFile = useCallback((path: string) => {
     setSelectedFiles((prev) => {
@@ -475,8 +483,7 @@ export default function App() {
                 onKeyDown={handleKeyDown}
                 placeholder="Ask about the code, request specific checks, or chat…"
                 rows={1}
-                className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none max-h-32 leading-relaxed"
-                style={{ fieldSizing: "content" } as any}
+                className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none max-h-32 leading-relaxed overflow-y-auto"
               />
               <Button size="icon" className="h-8 w-8 shrink-0" onClick={sendChat} disabled={!input.trim() || isStreaming}>
                 <Send className="h-3.5 w-3.5" />
