@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import Anthropic from "@anthropic-ai/sdk";
@@ -54,11 +55,18 @@ app.use((req, _res, next) => {
 
 const client = new Anthropic({ apiKey });
 
-// Path allowlist — restrict file operations to HOME (or ALLOWED_BASE_PATH env override)
-const ALLOWED_BASE = path.resolve(process.env.ALLOWED_BASE_PATH || process.env.HOME || "/");
+// Path allowlist — default to the filesystem root so any local path is reachable.
+// Set ALLOWED_BASE_PATH env var to restrict to a subtree (e.g. /home/user/projects).
+// path.parse(os.homedir()).root gives "C:\" on Windows and "/" on Unix/macOS.
+const ALLOWED_BASE = process.env.ALLOWED_BASE_PATH
+  ? path.resolve(process.env.ALLOWED_BASE_PATH)
+  : path.parse(os.homedir()).root;
+// Normalise so the base always ends with sep ("/" or "\"), making startsWith safe for both
+// root paths (where sep is already the last char) and non-root subtrees.
+const ALLOWED_BASE_PREFIX = ALLOWED_BASE.endsWith(path.sep) ? ALLOWED_BASE : ALLOWED_BASE + path.sep;
 function isPathAllowed(targetPath) {
   const resolved = path.resolve(targetPath);
-  return resolved === ALLOWED_BASE || resolved.startsWith(ALLOWED_BASE + path.sep);
+  return resolved === ALLOWED_BASE || resolved.startsWith(ALLOWED_BASE_PREFIX);
 }
 
 // List files
