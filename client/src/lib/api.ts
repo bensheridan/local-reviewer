@@ -1,5 +1,15 @@
 const BASE = "/api";
 
+async function apiFetch(input: string, options: RequestInit = {}, timeoutMs = 30_000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface FileItem {
   name: string;
   isDirectory: boolean;
@@ -19,6 +29,27 @@ export interface Message {
   content: string;
 }
 
+export interface PullRequestFile {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch?: string;
+}
+
+export interface PullRequestData {
+  number: number;
+  title: string;
+  body: string | null;
+  base: string;
+  head: string;
+  author: string;
+  url: string;
+  files: PullRequestFile[];
+}
+
+export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+
 // Client-side logger
 const log = {
   info:   (...a: unknown[]) => console.log (`%c[API] ℹ️`, "color:#6b7280", ...a),
@@ -30,7 +61,7 @@ const log = {
 export const api = {
   async listFiles(dirPath: string): Promise<{ path: string; items: FileItem[] }> {
     log.info(`listFiles: ${dirPath}`);
-    const res = await fetch(`${BASE}/files?path=${encodeURIComponent(dirPath)}`);
+    const res = await apiFetch(`${BASE}/files?path=${encodeURIComponent(dirPath)}`);
     if (!res.ok) {
       const err = await res.json();
       log.error(`listFiles failed:`, err);
@@ -43,7 +74,7 @@ export const api = {
 
   async readFile(filePath: string): Promise<{ content: string }> {
     log.info(`readFile: ${filePath}`);
-    const res = await fetch(`${BASE}/file?path=${encodeURIComponent(filePath)}`);
+    const res = await apiFetch(`${BASE}/file?path=${encodeURIComponent(filePath)}`);
     if (!res.ok) {
       const err = await res.json();
       log.error(`readFile failed:`, err);
@@ -56,7 +87,7 @@ export const api = {
 
   async gitDiff(repoPath: string, target = "HEAD"): Promise<{ diff: string }> {
     log.info(`gitDiff: ${repoPath} target=${target}`);
-    const res = await fetch(`${BASE}/git/diff?path=${encodeURIComponent(repoPath)}&target=${target}`);
+    const res = await apiFetch(`${BASE}/git/diff?path=${encodeURIComponent(repoPath)}&target=${target}`);
     if (!res.ok) { const err = await res.json(); log.error("gitDiff failed:", err); throw new Error(err.error); }
     const data = await res.json();
     log.ok(`gitDiff: ${data.diff.length} chars`);
@@ -65,7 +96,7 @@ export const api = {
 
   async gitStaged(repoPath: string): Promise<{ diff: string }> {
     log.info(`gitStaged: ${repoPath}`);
-    const res = await fetch(`${BASE}/git/staged?path=${encodeURIComponent(repoPath)}`);
+    const res = await apiFetch(`${BASE}/git/staged?path=${encodeURIComponent(repoPath)}`);
     if (!res.ok) { const err = await res.json(); log.error("gitStaged failed:", err); throw new Error(err.error); }
     const data = await res.json();
     log.ok(`gitStaged: ${data.diff.length} chars`);
@@ -74,7 +105,7 @@ export const api = {
 
   async gitLog(repoPath: string): Promise<{ commits: Commit[] }> {
     log.info(`gitLog: ${repoPath}`);
-    const res = await fetch(`${BASE}/git/log?path=${encodeURIComponent(repoPath)}`);
+    const res = await apiFetch(`${BASE}/git/log?path=${encodeURIComponent(repoPath)}`);
     if (!res.ok) { const err = await res.json(); log.error("gitLog failed:", err); throw new Error(err.error); }
     const data = await res.json();
     log.ok(`gitLog: ${data.commits.length} commits`);
@@ -83,10 +114,48 @@ export const api = {
 
   async gitCommit(repoPath: string, hash: string): Promise<{ diff: string }> {
     log.info(`gitCommit: ${hash}`);
-    const res = await fetch(`${BASE}/git/commit?path=${encodeURIComponent(repoPath)}&hash=${hash}`);
+    const res = await apiFetch(`${BASE}/git/commit?path=${encodeURIComponent(repoPath)}&hash=${hash}`);
     if (!res.ok) { const err = await res.json(); log.error("gitCommit failed:", err); throw new Error(err.error); }
     const data = await res.json();
     log.ok(`gitCommit: ${data.diff.length} chars`);
+    return data;
+  },
+
+  async githubStatus(): Promise<{ configured: boolean; preview: string | null }> {
+    const res = await apiFetch(`${BASE}/github/status`);
+    return res.json();
+  },
+
+  async saveGithubToken(token: string): Promise<{ ok: boolean; preview: string }> {
+    const res = await apiFetch(`${BASE}/setup/github`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to save token");
+    return data;
+  },
+
+  async fetchGitHubPR(url: string): Promise<PullRequestData> {
+    log.info(`fetchGitHubPR: ${url}`);
+    const res = await apiFetch(`${BASE}/github/pr?url=${encodeURIComponent(url)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to fetch PR");
+    log.ok(`fetchGitHubPR: PR #${data.number} — ${data.files.length} files`);
+    return data;
+  },
+
+  async postGitHubReview(prUrl: string, body: string, event: ReviewEvent): Promise<{ reviewId: number; htmlUrl: string }> {
+    log.info(`postGitHubReview: ${prUrl} as ${event}`);
+    const res = await apiFetch(`${BASE}/github/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prUrl, body, event }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to post review");
+    log.ok(`postGitHubReview: posted id=${data.reviewId}`);
     return data;
   },
 
@@ -97,7 +166,7 @@ export const api = {
     log.info(`streamReview: ${messages.length} messages, ${reviewContext.files?.length ?? 0} files, diff: ${reviewContext.diff ? reviewContext.diff.length + " chars" : "none"}`);
     log.info(`Last message: ${messages[messages.length - 1]?.content?.slice(0, 80)}…`);
 
-    const res = await fetch(`${BASE}/review`, {
+    const res = await apiFetch(`${BASE}/review`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages, reviewContext }),

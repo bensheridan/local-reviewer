@@ -2,14 +2,22 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+// Validate git commit hashes and refs to prevent command injection
+function isValidGitRef(ref) {
+  return typeof ref === "string" && /^[a-zA-Z0-9._/~^@{}:!-]+$/.test(ref) && ref.length < 256;
+}
+function isValidCommitHash(hash) {
+  return typeof hash === "string" && /^[a-f0-9]{7,40}$/i.test(hash);
+}
 const app = express();
 const PORT = 3001;
 
@@ -33,7 +41,8 @@ if (!apiKey) {
   log.ok(`API key loaded: sk-ant-...${apiKey.slice(-6)}`);
 }
 
-app.use(cors({ origin: "http://localhost:5173" }));
+const ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5176"];
+app.use(cors({ origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)) }));
 app.use(express.json({ limit: "10mb" }));
 
 // Request logger
@@ -45,11 +54,22 @@ app.use((req, _res, next) => {
 
 const client = new Anthropic({ apiKey });
 
+// Path allowlist — restrict file operations to HOME (or ALLOWED_BASE_PATH env override)
+const ALLOWED_BASE = path.resolve(process.env.ALLOWED_BASE_PATH || process.env.HOME || "/");
+function isPathAllowed(targetPath) {
+  const resolved = path.resolve(targetPath);
+  return resolved === ALLOWED_BASE || resolved.startsWith(ALLOWED_BASE + path.sep);
+}
+
 // List files
 app.get("/api/files", (req, res) => {
   const dirPath = req.query.path || process.cwd();
   try {
     const resolved = path.resolve(dirPath);
+    if (!isPathAllowed(resolved)) {
+      log.warn(`Blocked path traversal attempt: ${resolved}`);
+      return res.status(403).json({ error: "Access denied: path outside allowed directory" });
+    }
     log.info(`Listing: ${resolved}`);
     const entries = fs.readdirSync(resolved, { withFileTypes: true });
     const items = entries
@@ -77,24 +97,40 @@ app.get("/api/file", (req, res) => {
   const filePath = req.query.path;
   if (!filePath) return res.status(400).json({ error: "path required" });
   try {
-    const content = fs.readFileSync(path.resolve(filePath), "utf-8");
-    log.ok(`Read: ${filePath} (${content.length} chars)`);
-    res.json({ content, path: filePath });
+    const resolved = path.resolve(filePath);
+    if (!isPathAllowed(resolved)) {
+      log.warn(`Blocked file read attempt: ${resolved}`);
+      return res.status(403).json({ error: "Access denied: path outside allowed directory" });
+    }
+    const content = fs.readFileSync(resolved, "utf-8");
+    log.ok(`Read: ${resolved} (${content.length} chars)`);
+    res.json({ content, path: resolved });
   } catch (err) {
     log.error(`readFile: ${err.message}`);
     res.status(400).json({ error: err.message });
   }
 });
 
+async function findGitRoot(fromPath) {
+  const resolved = path.resolve(fromPath);
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: resolved });
+    return stdout.trim();
+  } catch {
+    throw new Error(`Not a git repository (or any parent): ${resolved}`);
+  }
+}
+
 // Git diff
 app.get("/api/git/diff", async (req, res) => {
   const repoPath = req.query.path || process.cwd();
   const target = req.query.target || "HEAD";
+  if (!isValidGitRef(target)) return res.status(400).json({ error: "Invalid git ref" });
   try {
-    const resolved = path.resolve(repoPath);
-    const { stdout } = await execAsync(`git diff ${target}`, { cwd: resolved });
-    log.ok(`git diff: ${stdout.length} chars`);
-    res.json({ diff: stdout, path: resolved });
+    const gitRoot = await findGitRoot(repoPath);
+    const { stdout } = await execFileAsync("git", ["diff", target], { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 });
+    log.ok(`git diff (${gitRoot}): ${stdout.length} chars`);
+    res.json({ diff: stdout, path: gitRoot });
   } catch (err) {
     log.error(`git diff: ${err.message}`);
     res.status(400).json({ error: err.message });
@@ -105,10 +141,10 @@ app.get("/api/git/diff", async (req, res) => {
 app.get("/api/git/staged", async (req, res) => {
   const repoPath = req.query.path || process.cwd();
   try {
-    const resolved = path.resolve(repoPath);
-    const { stdout } = await execAsync("git diff --staged", { cwd: resolved });
-    log.ok(`git staged: ${stdout.length} chars`);
-    res.json({ diff: stdout, path: resolved });
+    const gitRoot = await findGitRoot(repoPath);
+    const { stdout } = await execFileAsync("git", ["diff", "--staged"], { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 });
+    log.ok(`git staged (${gitRoot}): ${stdout.length} chars`);
+    res.json({ diff: stdout, path: gitRoot });
   } catch (err) {
     log.error(`git staged: ${err.message}`);
     res.status(400).json({ error: err.message });
@@ -119,17 +155,17 @@ app.get("/api/git/staged", async (req, res) => {
 app.get("/api/git/log", async (req, res) => {
   const repoPath = req.query.path || process.cwd();
   try {
-    const resolved = path.resolve(repoPath);
-    const { stdout } = await execAsync(
-      'git log --oneline -20 --pretty=format:"%H|%s|%an|%ar"',
-      { cwd: resolved }
+    const gitRoot = await findGitRoot(repoPath);
+    const { stdout } = await execFileAsync(
+      "git", ["log", "--oneline", "-20", '--pretty=format:%H|%s|%an|%ar'],
+      { cwd: gitRoot }
     );
     const commits = stdout.split("\n").filter(Boolean).map((line) => {
       const [hash, subject, author, date] = line.split("|");
       return { hash, subject, author, date };
     });
-    log.ok(`git log: ${commits.length} commits`);
-    res.json({ commits });
+    log.ok(`git log (${gitRoot}): ${commits.length} commits`);
+    res.json({ commits, path: gitRoot });
   } catch (err) {
     log.error(`git log: ${err.message}`);
     res.status(400).json({ error: err.message });
@@ -141,9 +177,10 @@ app.get("/api/git/commit", async (req, res) => {
   const repoPath = req.query.path || process.cwd();
   const hash = req.query.hash;
   if (!hash) return res.status(400).json({ error: "hash required" });
+  if (!isValidCommitHash(hash)) return res.status(400).json({ error: "Invalid commit hash" });
   try {
-    const resolved = path.resolve(repoPath);
-    const { stdout } = await execAsync(`git show ${hash}`, { cwd: resolved });
+    const gitRoot = await findGitRoot(repoPath);
+    const { stdout } = await execFileAsync("git", ["show", hash], { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 });
     log.ok(`git show ${hash}: ${stdout.length} chars`);
     res.json({ diff: stdout });
   } catch (err) {
@@ -241,7 +278,158 @@ Format your responses in clear Markdown. When showing code, use fenced code bloc
 // Health check
 app.get("/api/health", (_, res) => {
   log.info("Health check");
-  res.json({ ok: true, apiKeySet: !!apiKey });
+  res.json({ ok: true, apiKeySet: !!apiKey, githubTokenSet: !!process.env.GITHUB_TOKEN });
+});
+
+// ─── GitHub Routes ────────────────────────────────────────────────────────────
+
+function parsePRUrl(url) {
+  const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (!match) throw new Error("Invalid GitHub PR URL — expected https://github.com/owner/repo/pull/123");
+  return { owner: match[1], repo: match[2], prNumber: parseInt(match[3], 10) };
+}
+
+function githubHeaders() {
+  const token = process.env.GITHUB_TOKEN;
+  const headers = { Accept: "application/vnd.github.v3+json", "User-Agent": "code-reviewer/1.0" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
+// Fetch PR metadata + file diffs
+app.get("/api/github/pr", async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: "url query param required" });
+
+  try {
+    const { owner, repo, prNumber } = parsePRUrl(url);
+    log.info(`Fetching PR: ${owner}/${repo}#${prNumber}`);
+
+    const [prRes, filesRes] = await Promise.all([
+      fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, { headers: githubHeaders() }),
+      fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files`, { headers: githubHeaders() }),
+    ]);
+
+    if (!prRes.ok) {
+      const err = await prRes.json();
+      throw new Error(`GitHub API ${prRes.status}: ${err.message ?? prRes.statusText}`);
+    }
+
+    const pr = await prRes.json();
+    const files = filesRes.ok ? await filesRes.json() : [];
+
+    log.ok(`PR fetched: "${pr.title}" — ${files.length} files`);
+    res.json({
+      number: pr.number,
+      title: pr.title,
+      body: pr.body,
+      base: pr.base.ref,
+      head: pr.head.ref,
+      author: pr.user.login,
+      url: pr.html_url,
+      files: files.map((f) => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        patch: f.patch,
+      })),
+    });
+  } catch (err) {
+    log.error(`github/pr: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Post a review to a GitHub PR
+app.post("/api/github/review", async (req, res) => {
+  const { prUrl, body, event: reviewEvent } = req.body;
+  if (!prUrl || !body) return res.status(400).json({ error: "prUrl and body are required" });
+
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return res.status(401).json({ error: "No GitHub token configured — add GITHUB_TOKEN to server/.env" });
+
+  try {
+    const { owner, repo, prNumber } = parsePRUrl(prUrl);
+    log.info(`Posting review to ${owner}/${repo}#${prNumber} as ${reviewEvent ?? "COMMENT"}`);
+
+    const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
+      method: "POST",
+      headers: { ...githubHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ body, event: reviewEvent ?? "COMMENT" }),
+    });
+
+    if (!ghRes.ok) {
+      const err = await ghRes.json();
+      throw new Error(`GitHub API ${ghRes.status}: ${err.message ?? ghRes.statusText}`);
+    }
+
+    const data = await ghRes.json();
+    log.ok(`Review posted: id=${data.id}`);
+    res.json({ ok: true, reviewId: data.id, htmlUrl: data.html_url });
+  } catch (err) {
+    log.error(`github/review: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// GitHub token status
+app.get("/api/github/status", (_req, res) => {
+  const token = process.env.GITHUB_TOKEN;
+  res.json({ configured: !!token, preview: token ? `ghp_...${token.slice(-4)}` : null });
+});
+
+// Save GitHub token
+app.post("/api/setup/github", async (req, res) => {
+  const { token } = req.body;
+  if (!token || typeof token !== "string") return res.status(400).json({ error: "token is required" });
+
+  // Quick validation — hit the /user endpoint
+  log.info("Validating GitHub token…");
+  try {
+    const ghRes = await fetch("https://api.github.com/user", {
+      headers: { Authorization: `Bearer ${token}`, "User-Agent": "code-reviewer/1.0" },
+    });
+    if (!ghRes.ok) throw new Error(`GitHub returned ${ghRes.status}`);
+    const user = await ghRes.json();
+    log.ok(`GitHub token valid — logged in as @${user.login}`);
+  } catch (err) {
+    return res.status(401).json({ error: `Token validation failed: ${err.message}` });
+  }
+
+  const envPath = new URL(".env", import.meta.url).pathname;
+  try {
+    let existing = "";
+    try { existing = fs.readFileSync(envPath, "utf-8"); } catch {}
+    if (existing.includes("GITHUB_TOKEN=")) {
+      existing = existing.replace(/GITHUB_TOKEN=.*/g, `GITHUB_TOKEN=${token}`);
+    } else {
+      existing = existing.trimEnd() + `\nGITHUB_TOKEN=${token}\n`;
+    }
+    fs.writeFileSync(envPath, existing, "utf-8");
+    process.env.GITHUB_TOKEN = token;
+    log.ok("GitHub token saved");
+  } catch (err) {
+    return res.status(500).json({ error: `Could not write .env: ${err.message}` });
+  }
+
+  res.json({ ok: true, preview: `ghp_...${token.slice(-4)}` });
+});
+
+// Remove GitHub token
+app.delete("/api/setup/github", (_req, res) => {
+  const envPath = new URL(".env", import.meta.url).pathname;
+  try {
+    let existing = "";
+    try { existing = fs.readFileSync(envPath, "utf-8"); } catch {}
+    existing = existing.replace(/GITHUB_TOKEN=.*/g, "GITHUB_TOKEN=");
+    fs.writeFileSync(envPath, existing, "utf-8");
+    process.env.GITHUB_TOKEN = "";
+    log.ok("GitHub token removed");
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {
