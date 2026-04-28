@@ -44,9 +44,13 @@ export default function App() {
 
   // ─── Sidebar state ─────────────────────────────────────────────────────
   const [sideCollapsed, setSideCollapsed] = useState(false);
-  const [sideTab, setSideTab] = useState<SideTab>("files");
+  const [sideTab, setSideTab] = useState<SideTab>(
+    () => (localStorage.getItem("cr_side_tab") as SideTab | null) ?? "files"
+  );
   const [rightCollapsed, setRightCollapsed] = useState(false);
-  const [sideWidth, setSideWidth] = useState(256);
+  const [sideWidth, setSideWidth] = useState(
+    () => parseInt(localStorage.getItem("cr_side_width") ?? "256", 10)
+  );
 
   // ─── Review context ────────────────────────────────────────────────────
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -64,6 +68,10 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ─── Persist sidebar prefs ────────────────────────────────────────────
+  useEffect(() => { localStorage.setItem("cr_side_tab", sideTab); }, [sideTab]);
+  useEffect(() => { localStorage.setItem("cr_side_width", String(sideWidth)); }, [sideWidth]);
 
   // ─── Check API key + GitHub token on mount ────────────────────────────
   useEffect(() => {
