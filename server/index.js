@@ -477,7 +477,7 @@ wss.on("connection", (ws, req) => {
 
   const proc = spawn(shell, shellArgs, {
     cwd,
-    env: { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1" },
+    env: { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1", npm_config_prefix: undefined },
     stdio: "pipe",
   });
 
