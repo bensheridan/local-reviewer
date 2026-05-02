@@ -46,6 +46,7 @@ export function Terminal({ cwd, active }: TerminalProps) {
     term.loadAddon(fit);
     term.open(containerRef.current);
     fit.fit();
+    term.focus();
 
     xtermRef.current = term;
     fitRef.current = fit;
@@ -64,7 +65,7 @@ export function Terminal({ cwd, active }: TerminalProps) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fit when panel becomes active or resizes
+  // Fit and focus when panel becomes active
   useEffect(() => {
     if (!active || !fitRef.current || !wsRef.current) return;
     fitRef.current.fit();
@@ -72,6 +73,7 @@ export function Terminal({ cwd, active }: TerminalProps) {
     if (wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "resize", cols, rows }));
     }
+    xtermRef.current?.focus();
   }, [active]);
 
   useEffect(() => {
@@ -87,5 +89,5 @@ export function Terminal({ cwd, active }: TerminalProps) {
     return () => observer.disconnect();
   }, [active]);
 
-  return <div ref={containerRef} className="h-full w-full" />;
+  return <div ref={containerRef} className="h-full w-full" onClick={() => xtermRef.current?.focus()} />;
 }
