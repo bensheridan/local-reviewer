@@ -475,13 +475,21 @@ wss.on("connection", (ws, req) => {
 
   log.info(`Terminal opened — shell: ${shell}, cwd: ${cwd}`);
 
-  const term = pty.spawn(shell, [], {
-    name: "xterm-256color",
-    cols: 80,
-    rows: 24,
-    cwd,
-    env: process.env,
-  });
+  let term;
+  try {
+    term = pty.spawn(shell, [], {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd,
+      env: process.env,
+    });
+  } catch (err) {
+    log.error(`PTY spawn failed: ${err.message}`);
+    ws.send(JSON.stringify({ type: "output", data: `\r\n\x1b[31mFailed to start terminal: ${err.message}\x1b[0m\r\n` }));
+    ws.close();
+    return;
+  }
 
   term.onData((data) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", data }));
