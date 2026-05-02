@@ -25,11 +25,6 @@ Designed to run locally — no data leaves your machine except the code you choo
 npm run install:all
 ```
 
-> **Windows note:** The integrated terminal uses `node-pty`, a native module that requires
-> [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
-> Install them before running `npm run install:all`.
-> If you update your Node.js version, run `npm rebuild node-pty` in the `server/` directory.
-
 #### 2. Configure your API key
 
 ```bash
@@ -114,7 +109,9 @@ Ask Claude: *"Review my changes in /path/to/my/project"*
 
 The terminal runs in your local shell (`$SHELL` on macOS/Linux, PowerShell on Windows) with the current repo as its working directory. Because it uses your local environment, `gh` CLI commands work with your existing GitHub auth — no token configuration needed in the app.
 
-You can open multiple tabs with the `+` button. Tabs survive repo navigation and page focus changes. Close a tab to kill that shell process.
+You can open multiple tabs with the `+` button (capped at 8). Tabs survive repo navigation and page focus changes. Close a tab to kill that shell process.
+
+> **Limitations:** The terminal uses a plain piped shell (no PTY), so interactive full-screen programs (`vim`, `nano`, `top`, `less` in interactive mode) and shell features that depend on a TTY (arrow-key history, tab completion, readline editing) won't work. Stick to non-interactive commands — `gh pr comment --body "..."`, `git`, `ls`, etc. Use Ctrl+C to interrupt a running command.
 
 > **Tip:** Use `gh pr comment`, `gh pr review`, `gh pr merge`, and other `gh` commands directly
 > in the terminal to interact with GitHub without configuring a token in the app.

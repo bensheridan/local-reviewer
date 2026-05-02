@@ -22,12 +22,14 @@ function makeTab(cwd: string): Tab {
 
 const MIN_HEIGHT = 120;
 const MAX_HEIGHT = 600;
-const DEFAULT_HEIGHT = parseInt(localStorage.getItem("cr_term_height") ?? "260", 10);
+const MAX_TABS = 8;
 
 export function TerminalDrawer({ cwd }: TerminalDrawerProps) {
   const [tabs, setTabs] = useState<Tab[]>(() => [makeTab(cwd)]);
   const [activeId, setActiveId] = useState<number>(() => tabs[0].id);
-  const [height, setHeight] = useState(DEFAULT_HEIGHT);
+  const [height, setHeight] = useState(() =>
+    parseInt(localStorage.getItem("cr_term_height") ?? "260", 10)
+  );
   const dragging = useRef(false);
   const dragStartY = useRef(0);
   const dragStartH = useRef(0);
@@ -37,24 +39,26 @@ export function TerminalDrawer({ cwd }: TerminalDrawerProps) {
   }, [height]);
 
   const addTab = useCallback(() => {
-    const tab = makeTab(cwd);
-    setTabs((prev) => [...prev, tab]);
-    setActiveId(tab.id);
+    setTabs((prev) => {
+      if (prev.length >= MAX_TABS) return prev;
+      const tab = makeTab(cwd);
+      setActiveId(tab.id);
+      return [...prev, tab];
+    });
   }, [cwd]);
 
   const closeTab = useCallback((id: number) => {
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== id);
-      if (next.length === 0) return [makeTab(cwd)];
-      return next;
+      const finalTabs = next.length === 0 ? [makeTab(cwd)] : next;
+      setActiveId((activeId) => {
+        if (activeId !== id) return activeId;
+        const idx = prev.findIndex((t) => t.id === id);
+        return (prev[idx + 1] ?? prev[idx - 1])?.id ?? finalTabs[0].id;
+      });
+      return finalTabs;
     });
-    setActiveId((prev) => {
-      if (prev !== id) return prev;
-      const idx = tabs.findIndex((t) => t.id === id);
-      const fallback = tabs[idx + 1] ?? tabs[idx - 1];
-      return fallback?.id ?? tabs[0].id;
-    });
-  }, [tabs, cwd]);
+  }, [cwd]);
 
   // Drag-to-resize from the top edge
   const onMouseDown = useCallback((e: React.MouseEvent) => {

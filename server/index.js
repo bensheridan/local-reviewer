@@ -471,13 +471,29 @@ const wss = new WebSocketServer({ noServer: true });
 
 wss.on("connection", (ws, req) => {
   const params = new URL(req.url, `http://localhost`).searchParams;
-  const cwd = params.get("cwd") || os.homedir();
+  const requestedCwd = params.get("cwd") || os.homedir();
+  const cwd = path.resolve(requestedCwd);
+
+  if (!isPathAllowed(cwd)) {
+    log.warn(`Terminal rejected — cwd not allowed: ${cwd}`);
+    ws.close(1008, "Path not allowed");
+    return;
+  }
+  try {
+    if (!fs.statSync(cwd).isDirectory()) throw new Error("not a directory");
+  } catch (err) {
+    log.warn(`Terminal rejected — invalid cwd ${cwd}: ${err.message}`);
+    ws.close(1011, "Invalid cwd");
+    return;
+  }
 
   log.info(`Terminal opened — shell: ${shell}, cwd: ${cwd}`);
 
+  // Strip npm_config_prefix so nvm doesn't warn in the spawned shell
+  const { npm_config_prefix, ...cleanEnv } = process.env;
   const proc = spawn(shell, shellArgs, {
     cwd,
-    env: { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1", npm_config_prefix: undefined },
+    env: { ...cleanEnv, TERM: "xterm-256color", COLORTERM: "truecolor", FORCE_COLOR: "1" },
     stdio: "pipe",
     detached: process.platform !== "win32",
   });
@@ -502,16 +518,21 @@ wss.on("connection", (ws, req) => {
   ws.on("message", (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
-      if (msg.type === "input") proc.stdin.write(msg.data);
-      else if (msg.type === "signal" && msg.data === "SIGINT") {
+      if (msg.type === "input") {
+        if (!proc.killed && proc.stdin.writable) proc.stdin.write(msg.data);
+      } else if (msg.type === "signal" && msg.data === "SIGINT") {
         // Signal the shell's process group, not just the shell — and never the server's group
         if (process.platform !== "win32" && proc.pid) {
-          try { process.kill(-proc.pid, "SIGINT"); } catch {}
-        } else {
+          try { process.kill(-proc.pid, "SIGINT"); } catch (err) {
+            log.error(`Terminal SIGINT failed: ${err.message}`);
+          }
+        } else if (proc.stdin.writable) {
           proc.stdin.write("\x03");
         }
       }
-    } catch {}
+    } catch (err) {
+      log.error(`Terminal message error: ${err.message}`);
+    }
   });
 
   ws.on("close", () => {
