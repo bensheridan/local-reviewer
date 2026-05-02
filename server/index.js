@@ -207,6 +207,7 @@ app.get("/api/git/commit", async (req, res) => {
   }
 });
 
+// Keep in sync with CLAUDE_MODELS in client/src/lib/api.ts
 const ALLOWED_MODELS = [
   "claude-haiku-4-5-20251001",
   "claude-sonnet-4-6",

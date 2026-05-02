@@ -52,11 +52,14 @@ export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
 
 export type ClaudeModel = "claude-haiku-4-5-20251001" | "claude-sonnet-4-6" | "claude-opus-4-7";
 
+// Keep in sync with ALLOWED_MODELS in server/index.js
 export const CLAUDE_MODELS: { id: ClaudeModel; label: string }[] = [
   { id: "claude-haiku-4-5-20251001", label: "Haiku" },
-  { id: "claude-sonnet-4-6",         label: "Sonnet" },
-  { id: "claude-opus-4-7",           label: "Opus" },
+  { id: "claude-sonnet-4-6", label: "Sonnet" },
+  { id: "claude-opus-4-7", label: "Opus" },
 ];
+
+export const DEFAULT_MODEL: ClaudeModel = "claude-sonnet-4-6";
 
 // Client-side logger
 const log = {
@@ -170,7 +173,7 @@ export const api = {
   async *streamReview(
     messages: Message[],
     reviewContext: { files?: string[]; diff?: string },
-    model: ClaudeModel = "claude-sonnet-4-6"
+    model: ClaudeModel = DEFAULT_MODEL
   ): AsyncGenerator<string> {
     log.info(`streamReview: model=${model}, ${messages.length} messages, ${reviewContext.files?.length ?? 0} files, diff: ${reviewContext.diff ? reviewContext.diff.length + " chars" : "none"}`);
     log.info(`Last message: ${messages[messages.length - 1]?.content?.slice(0, 80)}…`);

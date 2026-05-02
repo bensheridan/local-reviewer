@@ -22,7 +22,7 @@ import { PrPanel } from "@/components/PrPanel";
 import { ContextPanel } from "@/components/ContextPanel";
 import { ChatMessage } from "@/components/ChatMessage";
 import { SetupScreen } from "@/components/SetupScreen";
-import { api, CLAUDE_MODELS, type ClaudeModel, type FileItem, type Message, type PullRequestData } from "@/lib/api";
+import { api, CLAUDE_MODELS, DEFAULT_MODEL, type ClaudeModel, type FileItem, type Message, type PullRequestData } from "@/lib/api";
 
 type SideTab = "files" | "git" | "pr";
 type SetupState = "checking" | "needed" | "done";
@@ -62,9 +62,11 @@ export default function App() {
   const [githubTokenSet, setGithubTokenSet] = useState(false);
 
   // ─── Model selector ────────────────────────────────────────────────────
-  const [model, setModel] = useState<ClaudeModel>(
-    () => (localStorage.getItem("cr_model") as ClaudeModel | null) ?? "claude-sonnet-4-6"
-  );
+  const [model, setModel] = useState<ClaudeModel>(() => {
+    const stored = localStorage.getItem("cr_model");
+    const validIds = CLAUDE_MODELS.map((m) => m.id);
+    return stored && validIds.includes(stored as ClaudeModel) ? (stored as ClaudeModel) : DEFAULT_MODEL;
+  });
 
   // ─── Chat ──────────────────────────────────────────────────────────────
   const [messages, setMessages] = useState<Message[]>([]);
@@ -507,13 +509,16 @@ export default function App() {
               <p className="text-[10px] text-muted-foreground">
                 Enter to send · Shift+Enter for new line
               </p>
-              <div className="flex items-center gap-0.5 bg-muted rounded-md p-0.5">
+              <div role="group" aria-label="Select model" className="flex items-center gap-0.5 bg-muted rounded-md p-0.5">
                 {CLAUDE_MODELS.map((m) => (
                   <button
+                    type="button"
                     key={m.id}
                     onClick={() => setModel(m.id)}
+                    disabled={isStreaming}
+                    aria-pressed={model === m.id}
                     className={cn(
-                      "text-[10px] px-2 py-0.5 rounded transition-colors",
+                      "text-[10px] px-2 py-0.5 rounded transition-colors disabled:opacity-50",
                       model === m.id
                         ? "bg-background text-foreground shadow-sm font-medium"
                         : "text-muted-foreground hover:text-foreground"
