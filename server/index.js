@@ -3,8 +3,11 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import http from "http";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { WebSocketServer } from "ws";
+import pty from "node-pty";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
 
@@ -459,7 +462,59 @@ app.delete("/api/setup/github", (_req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+// ─── Terminal WebSocket ────────────────────────────────────────────────────────
+
+const shell = process.platform === "win32" ? "powershell.exe" : (process.env.SHELL || "/bin/bash");
+const wss = new WebSocketServer({ noServer: true });
+
+wss.on("connection", (ws, req) => {
+  const params = new URL(req.url, `http://localhost`).searchParams;
+  const cwd = params.get("cwd") || os.homedir();
+
+  log.info(`Terminal opened — shell: ${shell}, cwd: ${cwd}`);
+
+  const term = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols: 80,
+    rows: 24,
+    cwd,
+    env: process.env,
+  });
+
+  term.onData((data) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", data }));
+  });
+
+  term.onExit(({ exitCode }) => {
+    log.info(`Terminal exited — code: ${exitCode}`);
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "exit", exitCode }));
+  });
+
+  ws.on("message", (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === "input") term.write(msg.data);
+      if (msg.type === "resize") term.resize(msg.cols, msg.rows);
+    } catch {}
+  });
+
+  ws.on("close", () => {
+    log.info("Terminal WS closed — killing PTY");
+    term.kill();
+  });
+});
+
+server.on("upgrade", (req, socket, head) => {
+  if (req.url?.startsWith("/terminal")) {
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  } else {
+    socket.destroy();
+  }
+});
+
+server.listen(PORT, () => {
   console.log(`\n🔍 Code Reviewer server → http://localhost:${PORT}`);
   console.log(`   API key: ${apiKey ? `✅ set (...${apiKey.slice(-6)})` : "❌ MISSING — add to server/.env"}`);
   console.log(`   CORS:    http://localhost:5173\n`);
