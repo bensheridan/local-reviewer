@@ -22,7 +22,7 @@ import { PrPanel } from "@/components/PrPanel";
 import { ContextPanel } from "@/components/ContextPanel";
 import { ChatMessage } from "@/components/ChatMessage";
 import { SetupScreen } from "@/components/SetupScreen";
-import { api, type FileItem, type Message, type PullRequestData } from "@/lib/api";
+import { api, CLAUDE_MODELS, DEFAULT_MODEL, type ClaudeModel, type FileItem, type Message, type PullRequestData } from "@/lib/api";
 
 type SideTab = "files" | "git" | "pr";
 type SetupState = "checking" | "needed" | "done";
@@ -61,6 +61,13 @@ export default function App() {
   const [loadedPR, setLoadedPR] = useState<PullRequestData | null>(null);
   const [githubTokenSet, setGithubTokenSet] = useState(false);
 
+  // ─── Model selector ────────────────────────────────────────────────────
+  const [model, setModel] = useState<ClaudeModel>(() => {
+    const stored = localStorage.getItem("cr_model");
+    const validIds = CLAUDE_MODELS.map((m) => m.id);
+    return stored && validIds.includes(stored as ClaudeModel) ? (stored as ClaudeModel) : DEFAULT_MODEL;
+  });
+
   // ─── Chat ──────────────────────────────────────────────────────────────
   const [messages, setMessages] = useState<Message[]>([]);
   const [lastReview, setLastReview] = useState<string | null>(null);
@@ -69,9 +76,10 @@ export default function App() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // ─── Persist sidebar prefs ────────────────────────────────────────────
+  // ─── Persist sidebar prefs + model ───────────────────────────────────
   useEffect(() => { localStorage.setItem("cr_side_tab", sideTab); }, [sideTab]);
   useEffect(() => { localStorage.setItem("cr_side_width", String(sideWidth)); }, [sideWidth]);
+  useEffect(() => { localStorage.setItem("cr_model", model); }, [model]);
 
   // ─── Check API key + GitHub token on mount ────────────────────────────
   useEffect(() => {
@@ -180,7 +188,7 @@ export default function App() {
     const reviewContext = { files: [...selectedFiles], diff: diff ?? undefined };
     try {
       let full = "";
-      for await (const chunk of api.streamReview(allMessages, reviewContext)) {
+      for await (const chunk of api.streamReview(allMessages, reviewContext, model)) {
         full += chunk;
         setMessages((prev) => {
           const updated = [...prev];
@@ -497,9 +505,30 @@ export default function App() {
                 <Send className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <p className="text-[10px] text-muted-foreground mt-1.5 px-1">
-              Enter to send · Shift+Enter for new line
-            </p>
+            <div className="flex items-center justify-between mt-1.5 px-1">
+              <p className="text-[10px] text-muted-foreground">
+                Enter to send · Shift+Enter for new line
+              </p>
+              <div role="group" aria-label="Select model" className="flex items-center gap-0.5 bg-muted rounded-md p-0.5">
+                {CLAUDE_MODELS.map((m) => (
+                  <button
+                    type="button"
+                    key={m.id}
+                    onClick={() => setModel(m.id)}
+                    disabled={isStreaming}
+                    aria-pressed={model === m.id}
+                    className={cn(
+                      "text-[10px] px-2 py-0.5 rounded transition-colors disabled:opacity-50",
+                      model === m.id
+                        ? "bg-background text-foreground shadow-sm font-medium"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
