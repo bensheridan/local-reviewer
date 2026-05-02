@@ -4,10 +4,9 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import http from "http";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { WebSocketServer } from "ws";
-import pty from "node-pty";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
 
@@ -467,6 +466,7 @@ const server = http.createServer(app);
 // ─── Terminal WebSocket ────────────────────────────────────────────────────────
 
 const shell = process.platform === "win32" ? "powershell.exe" : (process.env.SHELL || "/bin/bash");
+const shellArgs = process.platform === "win32" ? [] : ["-i", "-l"];
 const wss = new WebSocketServer({ noServer: true });
 
 wss.on("connection", (ws, req) => {
@@ -475,42 +475,37 @@ wss.on("connection", (ws, req) => {
 
   log.info(`Terminal opened — shell: ${shell}, cwd: ${cwd}`);
 
-  let term;
-  try {
-    term = pty.spawn(shell, [], {
-      name: "xterm-256color",
-      cols: 80,
-      rows: 24,
-      cwd,
-      env: process.env,
-    });
-  } catch (err) {
-    log.error(`PTY spawn failed: ${err.message}`);
-    ws.send(JSON.stringify({ type: "output", data: `\r\n\x1b[31mFailed to start terminal: ${err.message}\x1b[0m\r\n` }));
-    ws.close();
-    return;
-  }
-
-  term.onData((data) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", data }));
+  const proc = spawn(shell, shellArgs, {
+    cwd,
+    env: { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1" },
+    stdio: "pipe",
   });
 
-  term.onExit(({ exitCode }) => {
-    log.info(`Terminal exited — code: ${exitCode}`);
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "exit", exitCode }));
+  const send = (data) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", data }));
+  };
+
+  proc.stdout.on("data", (d) => send(d.toString()));
+  proc.stderr.on("data", (d) => send(d.toString()));
+  proc.on("close", (code) => {
+    log.info(`Terminal exited — code: ${code}`);
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "exit", exitCode: code }));
+  });
+  proc.on("error", (err) => {
+    log.error(`Shell error: ${err.message}`);
+    send(`\r\n\x1b[31mShell error: ${err.message}\x1b[0m\r\n`);
   });
 
   ws.on("message", (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
-      if (msg.type === "input") term.write(msg.data);
-      if (msg.type === "resize") term.resize(msg.cols, msg.rows);
+      if (msg.type === "input") proc.stdin.write(msg.data);
     } catch {}
   });
 
   ws.on("close", () => {
-    log.info("Terminal WS closed — killing PTY");
-    term.kill();
+    log.info("Terminal WS closed — killing shell");
+    proc.kill();
   });
 });
 
