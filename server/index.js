@@ -207,11 +207,19 @@ app.get("/api/git/commit", async (req, res) => {
   }
 });
 
+const ALLOWED_MODELS = [
+  "claude-haiku-4-5-20251001",
+  "claude-sonnet-4-6",
+  "claude-opus-4-7",
+];
+const DEFAULT_MODEL = "claude-sonnet-4-6";
+
 // Claude streaming review
 app.post("/api/review", async (req, res) => {
-  const { messages, systemPrompt, reviewContext } = req.body;
+  const { messages, systemPrompt, reviewContext, model: requestedModel } = req.body;
+  const model = ALLOWED_MODELS.includes(requestedModel) ? requestedModel : DEFAULT_MODEL;
 
-  log.info(`Review — ${messages?.length ?? 0} messages, ${reviewContext?.files?.length ?? 0} files, diff: ${reviewContext?.diff ? reviewContext.diff.length + " chars" : "none"}`);
+  log.info(`Review — model: ${model}, ${messages?.length ?? 0} messages, ${reviewContext?.files?.length ?? 0} files, diff: ${reviewContext?.diff ? reviewContext.diff.length + " chars" : "none"}`);
 
   if (!apiKey) {
     log.error("Cannot call Claude — API key missing");
@@ -239,7 +247,7 @@ app.post("/api/review", async (req, res) => {
     log.stream("Opening Claude stream…");
 
     const stream = client.messages.stream({
-      model: "claude-opus-4-5",
+      model,
       max_tokens: 8096,
       system,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
