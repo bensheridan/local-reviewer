@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import Anthropic from "@anthropic-ai/sdk";
@@ -54,11 +55,28 @@ app.use((req, _res, next) => {
 
 const client = new Anthropic({ apiKey });
 
-// Path allowlist — restrict file operations to HOME (or ALLOWED_BASE_PATH env override)
-const ALLOWED_BASE = path.resolve(process.env.ALLOWED_BASE_PATH || process.env.HOME || "/");
+// Path allowlist — default to the filesystem root so any local path is reachable.
+// Set ALLOWED_BASE_PATH env var to restrict to a subtree (e.g. /home/user/projects).
+// path.parse(os.homedir()).root gives "C:\" on Windows and "/" on Unix/macOS.
+function buildAllowedBase(rawPath) {
+  const resolved = path.resolve(rawPath);
+  const prefix = resolved.endsWith(path.sep) ? resolved : resolved + path.sep;
+  return { exact: resolved, prefix };
+}
+
+const fsRoot = path.parse(os.homedir()).root;
+const allowedBase = buildAllowedBase(process.env.ALLOWED_BASE_PATH || fsRoot);
+if (!process.env.ALLOWED_BASE_PATH) {
+  log.warn("File operations are allowed on the entire filesystem. Set ALLOWED_BASE_PATH to restrict access.");
+}
+
 function isPathAllowed(targetPath) {
   const resolved = path.resolve(targetPath);
-  return resolved === ALLOWED_BASE || resolved.startsWith(ALLOWED_BASE + path.sep);
+  if (process.platform === "win32") {
+    const lower = resolved.toLowerCase();
+    return lower === allowedBase.exact.toLowerCase() || lower.startsWith(allowedBase.prefix.toLowerCase());
+  }
+  return resolved === allowedBase.exact || resolved.startsWith(allowedBase.prefix);
 }
 
 // List files
