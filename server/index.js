@@ -479,14 +479,17 @@ wss.on("connection", (ws, req) => {
     cwd,
     env: { ...process.env, TERM: "xterm-256color", FORCE_COLOR: "1", npm_config_prefix: undefined },
     stdio: "pipe",
+    detached: process.platform !== "win32",
   });
 
   const send = (data) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", data }));
   };
 
-  proc.stdout.on("data", (d) => send(d.toString()));
-  proc.stderr.on("data", (d) => send(d.toString()));
+  // Without a PTY, programs emit bare \n; xterm needs \r\n. Translate, but skip \n already preceded by \r.
+  const normalize = (s) => s.replace(/\r?\n/g, "\r\n");
+  proc.stdout.on("data", (d) => send(normalize(d.toString())));
+  proc.stderr.on("data", (d) => send(normalize(d.toString())));
   proc.on("close", (code) => {
     log.info(`Terminal exited — code: ${code}`);
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "exit", exitCode: code }));
@@ -500,12 +503,24 @@ wss.on("connection", (ws, req) => {
     try {
       const msg = JSON.parse(raw.toString());
       if (msg.type === "input") proc.stdin.write(msg.data);
+      else if (msg.type === "signal" && msg.data === "SIGINT") {
+        // Signal the shell's process group, not just the shell — and never the server's group
+        if (process.platform !== "win32" && proc.pid) {
+          try { process.kill(-proc.pid, "SIGINT"); } catch {}
+        } else {
+          proc.stdin.write("\x03");
+        }
+      }
     } catch {}
   });
 
   ws.on("close", () => {
     log.info("Terminal WS closed — killing shell");
-    proc.kill();
+    if (process.platform !== "win32" && proc.pid) {
+      try { process.kill(-proc.pid, "SIGTERM"); } catch { proc.kill(); }
+    } else {
+      proc.kill();
+    }
   });
 });
 

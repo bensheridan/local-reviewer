@@ -44,9 +44,32 @@ export function Terminal({ cwd, active }: TerminalProps) {
       term.write("\r\n\x1b[31m[disconnected]\x1b[0m\r\n");
     };
 
+    // Without a PTY the shell doesn't echo, so do line-buffered local echo here.
+    let buffer = "";
     term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "input", data }));
+      for (const ch of data) {
+        const code = ch.charCodeAt(0);
+        if (ch === "\r") {
+          term.write("\r\n");
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "input", data: buffer + "\n" }));
+          }
+          buffer = "";
+        } else if (ch === "\x7f" || ch === "\b") {
+          if (buffer.length > 0) {
+            buffer = buffer.slice(0, -1);
+            term.write("\b \b");
+          }
+        } else if (ch === "\x03") {
+          term.write("^C\r\n");
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "signal", data: "SIGINT" }));
+          }
+          buffer = "";
+        } else if (code >= 32 || ch === "\t") {
+          buffer += ch;
+          term.write(ch);
+        }
       }
     });
 
