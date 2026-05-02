@@ -571,9 +571,9 @@ export default function App() {
           </div>
         )}
       </div>
-      </div>
 
       {termOpen && <TerminalDrawer cwd={repoPath} />}
+      </div>
     </TooltipProvider>
   );
 }
