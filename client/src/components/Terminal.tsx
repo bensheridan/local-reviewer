@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -13,28 +13,9 @@ export function Terminal({ cwd, active }: TerminalProps) {
   const xtermRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const mountedRef = useRef(false);
 
-  const connect = useCallback(() => {
-    const ws = new WebSocket(`ws://localhost:3001/terminal?cwd=${encodeURIComponent(cwd)}`);
-    wsRef.current = ws;
-
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === "output") xtermRef.current?.write(msg.data);
-    };
-
-    ws.onclose = () => {
-      xtermRef.current?.write("\r\n\x1b[31m[disconnected]\x1b[0m\r\n");
-    };
-
-    return ws;
-  }, [cwd]);
-
-  // Mount xterm once
   useEffect(() => {
-    if (mountedRef.current || !containerRef.current) return;
-    mountedRef.current = true;
+    if (!containerRef.current) return;
 
     const term = new XTerm({
       fontFamily: "Menlo, Monaco, 'Courier New', monospace",
@@ -46,12 +27,22 @@ export function Terminal({ cwd, active }: TerminalProps) {
     term.loadAddon(fit);
     term.open(containerRef.current);
     fit.fit();
-    term.focus();
+    setTimeout(() => term.focus(), 50);
 
     xtermRef.current = term;
     fitRef.current = fit;
 
-    const ws = connect();
+    const ws = new WebSocket(`ws://localhost:3001/terminal?cwd=${encodeURIComponent(cwd)}`);
+    wsRef.current = ws;
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "output") term.write(msg.data);
+    };
+
+    ws.onclose = () => {
+      term.write("\r\n\x1b[31m[disconnected]\x1b[0m\r\n");
+    };
 
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -60,20 +51,23 @@ export function Terminal({ cwd, active }: TerminalProps) {
     });
 
     return () => {
-      term.dispose();
       ws.close();
+      term.dispose();
+      xtermRef.current = null;
+      fitRef.current = null;
+      wsRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cwd]);
 
-  // Fit and focus when panel becomes active
+  // Fit and focus when tab becomes active
   useEffect(() => {
-    if (!active || !fitRef.current || !wsRef.current) return;
-    fitRef.current.fit();
-    const { cols, rows } = fitRef.current.proposeDimensions() ?? { cols: 80, rows: 24 };
-    if (wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "resize", cols, rows }));
+    if (!active) return;
+    fitRef.current?.fit();
+    const dims = fitRef.current?.proposeDimensions() ?? { cols: 80, rows: 24 };
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
     }
-    xtermRef.current?.focus();
+    setTimeout(() => xtermRef.current?.focus(), 50);
   }, [active]);
 
   useEffect(() => {
@@ -89,5 +83,11 @@ export function Terminal({ cwd, active }: TerminalProps) {
     return () => observer.disconnect();
   }, [active]);
 
-  return <div ref={containerRef} className="h-full w-full" onClick={() => xtermRef.current?.focus()} />;
+  return (
+    <div
+      ref={containerRef}
+      className="h-full w-full"
+      onClick={() => xtermRef.current?.focus()}
+    />
+  );
 }
