@@ -6,7 +6,7 @@ import os from "os";
 import http from "http";
 import { execFile, spawn } from "child_process";
 import { promisify } from "util";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
 
@@ -44,7 +44,11 @@ if (!apiKey) {
   log.ok(`API key loaded: sk-ant-...${apiKey.slice(-6)}`);
 }
 
-const ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5176"];
+const ALLOWED_ORIGINS = [
+  "http://localhost:5173", "http://localhost:5174", "http://localhost:5176",
+  "http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://127.0.0.1:5176",
+  "http://[::1]:5173",     "http://[::1]:5174",     "http://[::1]:5176",
+];
 app.use(cors({ origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)) }));
 app.use(express.json({ limit: "10mb" }));
 
@@ -479,36 +483,58 @@ wss.on("connection", (ws, req) => {
     ws.close(1008, "Path not allowed");
     return;
   }
+
+  // Resolve symlinks and re-check to prevent symlink traversal attacks
+  let realCwd;
   try {
-    if (!fs.statSync(cwd).isDirectory()) throw new Error("not a directory");
-  } catch (err) {
-    log.warn(`Terminal rejected — invalid cwd ${cwd}: ${err.message}`);
+    realCwd = fs.realpathSync(cwd);
+  } catch {
+    log.warn(`Terminal rejected — path does not exist: ${cwd}`);
     ws.close(1011, "Invalid cwd");
     return;
   }
+  try {
+    if (!fs.statSync(realCwd).isDirectory()) {
+      log.warn(`Terminal rejected — not a directory: ${realCwd}`);
+      ws.close(1011, "Not a directory");
+      return;
+    }
+  } catch (err) {
+    log.warn(`Terminal rejected — cannot stat path ${realCwd}: ${err.message}`);
+    ws.close(1011, "Invalid cwd");
+    return;
+  }
+  if (!isPathAllowed(realCwd)) {
+    log.warn(`Terminal rejected — cwd resolves outside allowed path (symlink): ${realCwd}`);
+    ws.close(1008, "Path not allowed");
+    return;
+  }
 
-  log.info(`Terminal opened — shell: ${shell}, cwd: ${cwd}`);
+  log.info(`Terminal opened — shell: ${shell}, cwd: ${realCwd}`);
 
   // Strip npm_config_prefix so nvm doesn't warn in the spawned shell
   const { npm_config_prefix, ...cleanEnv } = process.env;
   const proc = spawn(shell, shellArgs, {
-    cwd,
+    cwd: realCwd,
     env: { ...cleanEnv, TERM: "xterm-256color", COLORTERM: "truecolor", FORCE_COLOR: "1" },
     stdio: "pipe",
     detached: process.platform !== "win32",
   });
 
   const send = (data) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", data }));
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "output", data }));
   };
 
   // Without a PTY, programs emit bare \n; xterm needs \r\n. Translate, but skip \n already preceded by \r.
   const normalize = (s) => s.replace(/\r?\n/g, "\r\n");
   proc.stdout.on("data", (d) => send(normalize(d.toString())));
   proc.stderr.on("data", (d) => send(normalize(d.toString())));
+
+  let shellExited = false;
   proc.on("close", (code) => {
+    shellExited = true;
     log.info(`Terminal exited — code: ${code}`);
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "exit", exitCode: code }));
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "exit", exitCode: code }));
   });
   proc.on("error", (err) => {
     log.error(`Shell error: ${err.message}`);
@@ -538,7 +564,13 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     log.info("Terminal WS closed — killing shell");
     if (process.platform !== "win32" && proc.pid) {
-      try { process.kill(-proc.pid, "SIGTERM"); } catch { proc.kill(); }
+      const pid = proc.pid; // capture before proc can be GC'd or PID recycled
+      try { process.kill(-pid, "SIGTERM"); } catch { proc.kill(); }
+      // SIGKILL fallback for processes that ignore SIGTERM; guard against PID recycling
+      setTimeout(() => {
+        if (shellExited) return;
+        try { process.kill(-pid, "SIGKILL"); } catch { /* already dead */ }
+      }, 3000);
     } else {
       proc.kill();
     }
@@ -546,6 +578,15 @@ wss.on("connection", (ws, req) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
+  // Unlike the HTTP API (which allows same-origin/no-origin requests), we require an
+  // explicit allowed Origin for WebSocket connections because we're exposing a shell.
+  const origin = req.headers.origin;
+  if (!origin || !ALLOWED_ORIGINS.includes(origin)) {
+    log.warn(`WebSocket upgrade rejected — origin: ${origin ?? "(none)"}`);
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
   if (req.url?.startsWith("/terminal")) {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   } else {

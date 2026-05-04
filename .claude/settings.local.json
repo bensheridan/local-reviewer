@@ -7,7 +7,9 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(gh pr create --title 'fix: allow any local path on Windows' --body ' *)"
+      "Bash(gh pr create --title 'fix: allow any local path on Windows' --body ' *)",
+      "Bash(git pull *)",
+      "Bash(npm run *)"
     ]
   }
 }

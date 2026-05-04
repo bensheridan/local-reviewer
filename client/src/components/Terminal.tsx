@@ -27,12 +27,15 @@ export function Terminal({ cwd, active }: TerminalProps) {
     term.loadAddon(fit);
     term.open(containerRef.current);
     fit.fit();
-    setTimeout(() => term.focus(), 50);
+    requestAnimationFrame(() => term.focus());
 
     xtermRef.current = term;
     fitRef.current = fit;
 
-    const ws = new WebSocket(`ws://localhost:3001/terminal?cwd=${encodeURIComponent(cwd)}`);
+    const wsBase = import.meta.env.VITE_WS_URL ?? "ws://localhost:3001";
+    const wsUrl = new URL(`${wsBase}/terminal`);
+    if (cwd) wsUrl.searchParams.set("cwd", cwd);
+    const ws = new WebSocket(wsUrl.toString());
     wsRef.current = ws;
 
     ws.onmessage = (e) => {
@@ -90,7 +93,7 @@ export function Terminal({ cwd, active }: TerminalProps) {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
     }
-    setTimeout(() => xtermRef.current?.focus(), 50);
+    requestAnimationFrame(() => xtermRef.current?.focus());
   }, [active]);
 
   useEffect(() => {

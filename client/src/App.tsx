@@ -272,7 +272,7 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex flex-col h-screen bg-background overflow-hidden dark">
-      <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden">
 
         {/* ── Icon rail ──────────────────────────────────────────────── */}
         <div className="w-12 flex flex-col items-center py-3 gap-1 bg-sidebar border-r border-sidebar-border shrink-0">
@@ -570,9 +570,9 @@ export default function App() {
             />
           </div>
         )}
-      </div>
+        </div>
 
-      {termOpen && <TerminalDrawer cwd={repoPath} />}
+        {termOpen && <TerminalDrawer cwd={repoPath} />}
       </div>
     </TooltipProvider>
   );
