@@ -115,7 +115,7 @@ export function GitPanel({ repoPath, onLoadDiff }: GitPanelProps) {
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center space-y-2">
             <p className="text-xs text-muted-foreground">Diff loaded into chat context</p>
-            <Button size="sm" variant="outline" onClick={() => load(tab)}>
+            <Button size="sm" variant="secondary" onClick={() => load(tab)}>
               Reload diff
             </Button>
           </div>

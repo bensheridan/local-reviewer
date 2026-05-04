@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
+  TerminalSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import { PrPanel } from "@/components/PrPanel";
 import { ContextPanel } from "@/components/ContextPanel";
 import { ChatMessage } from "@/components/ChatMessage";
 import { SetupScreen } from "@/components/SetupScreen";
+import { TerminalDrawer } from "@/components/TerminalDrawer";
 import { api, CLAUDE_MODELS, DEFAULT_MODEL, type ClaudeModel, type FileItem, type Message, type PullRequestData } from "@/lib/api";
 
 type SideTab = "files" | "git" | "pr";
@@ -60,6 +62,9 @@ export default function App() {
   // ─── Remote PR ─────────────────────────────────────────────────────────
   const [loadedPR, setLoadedPR] = useState<PullRequestData | null>(null);
   const [githubTokenSet, setGithubTokenSet] = useState(false);
+
+  // ─── Terminal drawer ───────────────────────────────────────────────────
+  const [termOpen, setTermOpen] = useState(false);
 
   // ─── Model selector ────────────────────────────────────────────────────
   const [model, setModel] = useState<ClaudeModel>(() => {
@@ -266,7 +271,8 @@ export default function App() {
   // ─── Main app ──────────────────────────────────────────────────────────
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-screen bg-background overflow-hidden dark">
+      <div className="flex flex-col h-screen bg-background overflow-hidden dark">
+        <div className="flex flex-1 overflow-hidden">
 
         {/* ── Icon rail ──────────────────────────────────────────────── */}
         <div className="w-12 flex flex-col items-center py-3 gap-1 bg-sidebar border-r border-sidebar-border shrink-0">
@@ -377,6 +383,23 @@ export default function App() {
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">Clear chat</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setTermOpen((v) => !v)}
+                className={cn(
+                  "h-9 w-9 rounded-lg flex items-center justify-center transition-colors",
+                  termOpen
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                )}
+              >
+                <TerminalSquare className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Terminal</TooltipContent>
           </Tooltip>
         </div>
 
@@ -547,6 +570,9 @@ export default function App() {
             />
           </div>
         )}
+        </div>
+
+        {termOpen && <TerminalDrawer cwd={repoPath} />}
       </div>
     </TooltipProvider>
   );
